@@ -171,7 +171,7 @@ class ViolencePoseDetectionSystem:
             # Đọc frame từ video/webcam, success là True nếu đọc thành công
             success, frame = self.cap.read()
             if not success:
-                print("Không thể đọc khung hình, thoát...")
+                print("Video đã hết, thoát...")
                 break
 
             # Lấy chiều cao frame để dùng trong kiểm tra té ngã
@@ -275,7 +275,6 @@ class ViolencePoseDetectionSystem:
 
 def parse_args():
     import argparse
-    # Tạo parser để phân tích tham số dòng lệnh
     parser = argparse.ArgumentParser(description='Violence and Pose Detection System')
     parser.add_argument('--weights', type=str, default='yolo11n-pose.pt', help='Đường dẫn mô hình pose')
     parser.add_argument('--violence-weights', type=str,
@@ -286,7 +285,6 @@ def parse_args():
     parser.add_argument('--conf', type=float, default=0.4, help='Ngưỡng confidence')
     parser.add_argument('--view-img', action='store_true', help='Hiển thị kết quả real-time')
     parser.add_argument('--save-img', action='store_true', help='Lưu kết quả đầu ra')
-    # Trả về các tham số đã phân tích
     return parser.parse_args()
 
 
