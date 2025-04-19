@@ -4,11 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="757231f2-3238-4748-bdad-f02f7eccdbf1" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/test.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/pose_violence_detection.py" beforeDir="false" afterPath="$PROJECT_DIR$/pose_violence_detection.py" afterDir="false" />
-    </list>
+    <list default="true" id="757231f2-3238-4748-bdad-f02f7eccdbf1" name="Changes" comment="" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -106,7 +102,7 @@
       <workItem from="1745033800247" duration="11446000" />
       <workItem from="1745056484414" duration="1235000" />
       <workItem from="1745058114463" duration="1227000" />
-      <workItem from="1745059416031" duration="9503000" />
+      <workItem from="1745059416031" duration="10172000" />
     </task>
     <servers />
   </component>
