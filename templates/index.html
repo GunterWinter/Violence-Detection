@@ -1,125 +1,147 @@
-<script type="text/javascript">
-        var gk_isXlsx = false;
-        var gk_xlsxFileLookup = {};
-        var gk_fileData = {};
-        function filledCell(cell) {
-          return cell !== '' && cell != null;
-        }
-        function loadFileData(filename) {
-        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
-            try {
-                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
-                var firstSheetName = workbook.SheetNames[0];
-                var worksheet = workbook.Sheets[firstSheetName];
-
-                // Convert sheet to JSON to filter blank rows
-                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
-                // Filter out blank rows (rows where all cells are empty, null, or undefined)
-                var filteredData = jsonData.filter(row => row.some(filledCell));
-
-                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
-                var headerRowIndex = filteredData.findIndex((row, index) =>
-                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
-                );
-                // Fallback
-                if (headerRowIndex === -1 || headerRowIndex > 25) {
-                  headerRowIndex = 0;
-                }
-
-                // Convert filtered JSON back to CSV
-                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
-                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
-                return csv;
-            } catch (e) {
-                console.error(e);
-                return "";
-            }
-        }
-        return gk_fileData[filename] || "";
-        }
-        </script><!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <title>Violence Detection System</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
     <style>
         body {
+            background-color: #f8f9fa;
             font-family: Arial, sans-serif;
-            background-color: #f4f4f4;
-            margin: 0;
-            padding: 20px;
-        }
-        h1 {
-            text-align: center;
-            color: #333;
         }
         .container {
-            max-width: 600px;
-            margin: 0 auto;
-            background: white;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+            max-width: 900px;
+            margin-top: 30px;
         }
-        label {
-            display: block;
-            margin: 10px 0 5px;
-            color: #555;
-        }
-        input[type="text"] {
-            width: 100%;
-            padding: 8px;
-            margin-bottom: 10px;
+        .tab-content {
             border: 1px solid #ddd;
+            border-top: none;
+            padding: 20px;
+            background: white;
+            border-radius: 0 0 8px 8px;
+        }
+        .nav-tabs .nav-link {
+            font-weight: bold;
+        }
+        .form-group label {
+            font-weight: 500;
+        }
+        #stream {
+            max-width: 100%;
+            border: 1px solid #ccc;
             border-radius: 4px;
         }
-        input[type="checkbox"] {
-            margin-right: 5px;
+        #result img {
+            max-width: 100%;
         }
-        button {
-            background-color: #4CAF50;
-            color: white;
-            padding: 10px 15px;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            margin-top: 10px;
-        }
-        button:hover {
-            background-color: #45a049;
-        }
-        #stop-detection {
-            background-color: #f44336;
+        .spinner {
             display: none;
-        }
-        #stop-detection:hover {
-            background-color: #da190b;
-        }
-        #status {
-            margin-top: 20px;
             text-align: center;
-            color: #666;
+            margin: 20px 0;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Violence Detection System</h1>
-        <form id="detection-form">
-            <label for="rtsp_url">RTSP URL (e.g., rtsp://username:password@ip_address/path):</label>
-            <input type="text" id="rtsp_url" name="rtsp_url" required>
-            <input type="checkbox" id="enable_recording" name="enable_recording">
-            <label for="enable_recording">Enable recording when violence is detected</label>
-            <label for="record_dir">Recording Directory:</label>
-            <input type="text" id="record_dir" name="record_dir" value="recordings" required>
-            <button type="submit">Start Detection</button>
-        </form>
-        <button id="stop-detection">Stop Detection</button>
-        <div id="status">Detection is stopped</div>
+        <h1 class="text-center my-4">Violence Detection System</h1>
+        <ul class="nav nav-tabs" id="myTab" role="tablist">
+            <li class="nav-item">
+                <a class="nav-link active" id="rtsp-tab" data-toggle="tab" href="#rtsp" role="tab">RTSP Streaming</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" id="upload-tab" data-toggle="tab" href="#upload" role="tab">Upload File</a>
+            </li>
+        </ul>
+        <div class="tab-content" id="myTabContent">
+            <div class="tab-pane fade show active" id="rtsp" role="tabpanel">
+                <form id="rtsp-form">
+                    <div class="form-group">
+                        <label for="admin">Admin:</label>
+                        <input type="text" class="form-control" id="admin" name="admin" placeholder="e.g., admin" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="password">Password:</label>
+                        <input type="password" class="form-control" id="password" name="password" placeholder="e.g., password" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="ip">IP Address:</label>
+                        <input type="text" class="form-control" id="ip" name="ip" placeholder="e.g., 192.168.1.100" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="port">Port:</label>
+                        <input type="number" class="form-control" id="port" name="port" placeholder="e.g., 554" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="path">Path:</label>
+                        <input type="text" class="form-control" id="path" name="path" value="Streaming/Channels/101" placeholder="e.g., Streaming/Channels/101" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="protocol">Protocol:</label>
+                        <select class="form-control" id="protocol" name="protocol">
+                            <option value="tcp">TCP</option>
+                            <option value="udp">UDP</option>
+                        </select>
+                    </div>
+                    <div class="form-check">
+                        <input type="checkbox" class="form-check-input" id="enable_recording" name="enable_recording">
+                        <label class="form-check-label" for="enable_recording">Enable recording on violence detection</label>
+                    </div>
+                    <div class="form-group">
+                        <label for="record_dir">Recording Directory:</label>
+                        <input type="text" class="form-control" id="record_dir" name="record_dir" value="recordings" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="imgsz">Image Size (px):</label>
+                        <input type="number" class="form-control" id="imgsz" name="imgsz" value="640" min="1">
+                    </div>
+                    <div class="form-group">
+                        <label for="conf">Confidence Threshold (0-1):</label>
+                        <input type="number" step="0.01" class="form-control" id="conf" name="conf" value="0.4" min="0" max="1">
+                    </div>
+                    <div class="form-group">
+                        <label for="tail_length">Tail Length (seconds):</label>
+                        <input type="number" class="form-control" id="tail_length" name="tail_length" value="5" min="1">
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-block">Start Detection</button>
+                </form>
+                <div id="stream-container" style="display:none; margin-top: 20px;">
+                    <img id="stream" src="/video_feed" alt="RTSP Stream">
+                    <button id="stop-detection" class="btn btn-danger btn-block mt-2">Stop Detection</button>
+                </div>
+            </div>
+            <div class="tab-pane fade" id="upload" role="tabpanel">
+                <form id="upload-form" enctype="multipart/form-data">
+                    <div class="form-group">
+                    <label for="file">Select File (image or video):</label>
+                    <input type="file" class="form-control-file" id="file" name="file" accept="image/*,video/*" required>
+                    </div>
+                    <!-- Thêm trường ẩn cho record_dir -->
+                    <input type="hidden" id="record_dir_upload" name="record_dir" value="recordings">
+                    <div class="form-group">
+                        <label for="imgsz_upload">Image Size (px):</label>
+                        <input type="number" class="form-control" id="imgsz_upload" name="imgsz" value="640" min="1">
+                    </div>
+                    <div class="form-group">
+                        <label for="conf_upload">Confidence Threshold (0-1):</label>
+                        <input type="number" step="0.01" class="form-control" id="conf_upload" name="conf" value="0.4" min="0" max="1">
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-block">Start Detection</button>
+            </form>
+                <div class="spinner">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="sr-only">Loading...</span>
+                    </div>
+                </div>
+                <div id="result" class="mt-4"></div>
+            </div>
+        </div>
     </div>
-
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.5.3/dist/umd/popper.min.js"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
     <script>
-        document.getElementById('detection-form').addEventListener('submit', function(e) {
+        // RTSP Form Submission
+        document.getElementById('rtsp-form').addEventListener('submit', function(e) {
             e.preventDefault();
             const formData = new FormData(this);
             fetch('/start', {
@@ -127,9 +149,8 @@
                 body: formData
             }).then(response => {
                 if (response.ok) {
-                    document.getElementById('status').textContent = 'Detection started';
-                    document.getElementById('stop-detection').style.display = 'block';
-                    document.querySelector('button[type="submit"]').disabled = true;
+                    document.getElementById('stream-container').style.display = 'block';
+                    document.getElementById('rtsp-form').querySelector('button[type="submit"]').disabled = true;
                 } else {
                     alert('Failed to start detection');
                 }
@@ -138,19 +159,46 @@
             });
         });
 
+        // Stop Detection
         document.getElementById('stop-detection').addEventListener('click', function() {
             fetch('/stop', {
                 method: 'POST'
             }).then(response => {
                 if (response.ok) {
-                    document.getElementById('status').textContent = 'Detection stopped';
-                    document.getElementById('stop-detection').style.display = 'none';
-                    document.querySelector('button[type="submit"]').disabled = false;
+                    document.getElementById('stream-container').style.display = 'none';
+                    document.getElementById('rtsp-form').querySelector('button[type="submit"]').disabled = false;
                 } else {
                     alert('Failed to stop detection');
                 }
             }).catch(error => {
                 alert('Error: ' + error);
+            });
+        });
+
+        // Upload Form Submission
+        document.getElementById('upload-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            const formData = new FormData(this);
+            const resultDiv = document.getElementById('result');
+            const spinner = document.querySelector('.spinner');
+            resultDiv.innerHTML = '';
+            spinner.style.display = 'block';
+            fetch('/upload', {
+                method: 'POST',
+                body: formData
+            }).then(response => response.json()).then(data => {
+                spinner.style.display = 'none';
+                if (data.type === 'image') {
+                    resultDiv.innerHTML = `<img src="/output/${data.filename}" alt="Processed Image">`;
+                } else if (data.type === 'video') {
+                    resultDiv.innerHTML = `<a href="/output/${data.filename}" class="btn btn-success">Download Processed Video</a>`;
+                } else {
+                    resultDiv.innerHTML = '<p>Processing complete.</p>';
+                }
+            }).catch(error => {
+                spinner.style.display = 'none';
+                alert('Error: ' + error);
+                resultDiv.innerHTML = '<p>An error occurred during processing.</p>';
             });
         });
     </script>

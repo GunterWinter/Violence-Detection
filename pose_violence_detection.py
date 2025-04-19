@@ -11,48 +11,51 @@ from ffmpeg import FFmpeg
 
 class ViolencePoseDetectionSystem:
     def __init__(self, opt):
+        """Khởi tạo hệ thống phát hiện bạo lực và tư thế."""
         self.opt = opt
-        self.violence_model = YOLO(opt.violence_weights)
-        self.pose_model = YOLO(opt.weights)
-        self.output_dir = Path('output')
-        self.output_dir.mkdir(exist_ok=True)
+        self.violence_model = YOLO(opt['violence_weights'])
+        self.pose_model = YOLO(opt['weights'])
+        self.output_dir = Path(opt['record_dir'])
+        self.output_dir.mkdir(exist_ok=True, parents=True)
         self.source_type = self.determine_source_type()
         self.cap = None
         self.vid_writer = None
-        self.save = opt.save
-        self.tail_length = opt.tail_length
+        self.save = opt['save']
+        self.tail_length = opt['tail_length']
         self.recording = False
         self.ffmpeg_process = None
         self.activity_count = 0
         self.tail_frames = None
         self.running = True
-        # Chỉ dùng thread cho stream và webcam
         self.use_thread = self.source_type in ['stream', 'webcam']
         self.frame_queue = queue.Queue(maxsize=10) if self.use_thread else None
+        self.output_path = None
 
         if self.source_type != 'image':
-            self.cap = cv2.VideoCapture(0 if self.source_type == 'webcam' else self.opt.source)
+            self.cap = cv2.VideoCapture(0 if self.source_type == 'webcam' else self.opt['source'])
             if not self.cap.isOpened():
                 raise ValueError("Không thể mở nguồn video/stream")
             self.fps = self.cap.get(cv2.CAP_PROP_FPS) or 25
             self.tail_frames = self.tail_length * self.fps
 
     def determine_source_type(self):
-        if self.opt.source.isnumeric():
+        """Xác định loại nguồn đầu vào (image, video, webcam, stream)."""
+        if self.opt['source'].isnumeric():
             return 'webcam'
-        if self.opt.source.lower().startswith(('http://', 'https://', 'rtsp://')):
+        if self.opt['source'].lower().startswith(('http://', 'https://', 'rtsp://')):
             return 'stream'
-        if Path(self.opt.source).exists():
-            if Path(self.opt.source).suffix.lower() in ['.jpg', '.png', '.jpeg']:
+        if Path(self.opt['source']).exists():
+            if Path(self.opt['source']).suffix.lower() in ['.jpg', '.png', '.jpeg']:
                 return 'image'
             return 'video'
         raise ValueError("Nguồn đầu vào không hợp lệ")
 
     def frame_reader(self):
+        """Đọc frame từ nguồn video hoặc stream và đưa vào queue."""
         while self.running:
-            if self.source_type == 'stream' and self.opt.source.startswith('rtsp://'):
+            if self.source_type == 'stream' and self.opt['source'].startswith('rtsp://'):
                 if not self.cap.isOpened():
-                    self.cap = cv2.VideoCapture(self.opt.source)
+                    self.cap = cv2.VideoCapture(self.opt['source'])
                     if not self.cap.isOpened():
                         time.sleep(5)
                         continue
@@ -72,11 +75,13 @@ class ViolencePoseDetectionSystem:
                     time.sleep(0.1)
 
     def crop_image(self, image, box):
+        """Cắt ảnh theo bounding box."""
         xmin, ymin, xmax, ymax = box.xyxy[0].tolist()
         xmin, ymin, xmax, ymax = int(xmin), int(ymin), int(xmax), int(ymax)
         return image[ymin:ymax, xmin:xmax], (xmin, ymin)
 
     def draw_skeleton(self, image, kpts, offset):
+        """Vẽ skeleton từ keypoints lên ảnh."""
         if kpts is None or len(kpts.data) == 0:
             return
         for person_kpts in kpts.data:
@@ -86,6 +91,7 @@ class ViolencePoseDetectionSystem:
                     cv2.circle(image, (x, y), 5, (0, 255, 0), -1)
 
     def is_falling(self, person_kpts, person_box, frame_height):
+        """Kiểm tra xem người có đang ngã hay không."""
         left_shoulder_y = person_kpts[5][1] if person_kpts[5][2] > 0 else None
         right_shoulder_y = person_kpts[6][1] if person_kpts[6][2] > 0 else None
         shoulder_y = None
@@ -104,22 +110,25 @@ class ViolencePoseDetectionSystem:
         return (difference <= 0 and shoulder_y > thre) or (difference < 0)
 
     def initialize_video_writer(self, frame):
+        """Khởi tạo video writer để ghi video đầu ra."""
         if self.vid_writer is None:
             fps = 30 if self.source_type == 'webcam' else self.cap.get(cv2.CAP_PROP_FPS)
             if fps == 0:
-                fps = 30  # Đặt mặc định nếu không lấy được FPS
+                fps = 30
             w, h = frame.shape[1], frame.shape[0]
             output_path = str(self.output_dir / f'output_{int(time.time())}.mp4')
             self.vid_writer = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
+            self.output_path = output_path
             print(f"Đã khởi tạo video writer tại: {output_path}")
 
     def start_recording(self):
+        """Bắt đầu ghi hình từ RTSP stream bằng FFmpeg."""
         timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
         filename = self.output_dir / f'recording_{timestamp}.mkv'
         self.ffmpeg_process = (
             FFmpeg()
             .option("y")
-            .input(self.opt.source, rtsp_transport="tcp", rtsp_flags="prefer_tcp")
+            .input(self.opt['source'], rtsp_transport="tcp", rtsp_flags="prefer_tcp")
             .output(str(filename), vcodec="copy", acodec="copy")
         )
         self.ffmpeg_thread = threading.Thread(target=self.ffmpeg_process.execute)
@@ -128,6 +137,7 @@ class ViolencePoseDetectionSystem:
         print(f"Bắt đầu ghi hình: {filename}")
 
     def stop_recording(self):
+        """Dừng ghi hình từ RTSP stream."""
         if self.ffmpeg_process:
             self.ffmpeg_process.terminate()
             self.ffmpeg_thread.join()
@@ -136,14 +146,15 @@ class ViolencePoseDetectionSystem:
             print("Đã dừng ghi hình")
 
     def process_image(self):
-        image = cv2.imread(self.opt.source)
-        violence_results = self.violence_model.predict(image, conf=self.opt.conf, imgsz=self.opt.imgsz, verbose=False)
+        """Xử lý ảnh đầu vào và lưu kết quả."""
+        image = cv2.imread(self.opt['source'])
+        violence_results = self.violence_model.predict(image, conf=self.opt['conf'], imgsz=self.opt['imgsz'], verbose=False)
         violence_class_id = next(k for k, v in self.violence_model.names.items() if v == 'Violence')
         violence_boxes = [box for box in violence_results[0].boxes if box.cls == violence_class_id]
 
         for box in violence_boxes:
             cropped_image, offset = self.crop_image(image, box)
-            pose_results = self.pose_model.predict(cropped_image, conf=self.opt.conf, imgsz=self.opt.imgsz, verbose=False)
+            pose_results = self.pose_model.predict(cropped_image, conf=self.opt['conf'], imgsz=self.opt['imgsz'], verbose=False)
             p1 = (int(box.xyxy[0][0]), int(box.xyxy[0][1]))
             p2 = (int(box.xyxy[0][2]), int(box.xyxy[0][3]))
             cv2.rectangle(image, p1, p2, (0, 255, 0), 2)
@@ -151,20 +162,21 @@ class ViolencePoseDetectionSystem:
             if pose_results and pose_results[0].keypoints is not None:
                 self.draw_skeleton(image, pose_results[0].keypoints, offset)
 
-        if self.opt.view:
+        if self.opt['view']:
             cv2.imshow("Violence Detection", image)
             cv2.waitKey(0)
         if self.save:
-            output_path = str(self.output_dir / Path(self.opt.source).name)
+            output_path = str(self.output_dir / Path(self.opt['source']).name)
             cv2.imwrite(output_path, image)
+            self.output_path = output_path
             print(f"Ảnh đã lưu tại: {output_path}")
 
     def process_video_directly(self):
-        """Xử lý video tuần tự không dùng thread"""
-        self.cap = cv2.VideoCapture(self.opt.source)
+        """Xử lý video trực tiếp từ file video."""
+        self.cap = cv2.VideoCapture(self.opt['source'])
         if not self.cap.isOpened():
             raise ValueError("Không thể mở video")
-        if self.opt.view:
+        if self.opt['view']:
             cv2.namedWindow("Violence Detection", cv2.WINDOW_NORMAL)
 
         while self.cap.isOpened():
@@ -172,13 +184,13 @@ class ViolencePoseDetectionSystem:
             if not success:
                 break
             frame_height = frame.shape[0]
-            violence_results = self.violence_model.predict(frame, conf=self.opt.conf, imgsz=self.opt.imgsz, verbose=False)
+            violence_results = self.violence_model.predict(frame, conf=self.opt['conf'], imgsz=self.opt['imgsz'], verbose=False)
             violence_class_id = next(k for k, v in self.violence_model.names.items() if v == 'Violence')
             violence_boxes = [box for box in violence_results[0].boxes if box.cls == violence_class_id]
 
             for box in violence_boxes:
                 cropped_frame, offset = self.crop_image(frame, box)
-                pose_results = self.pose_model.predict(cropped_frame, conf=self.opt.conf, imgsz=self.opt.imgsz, verbose=False)
+                pose_results = self.pose_model.predict(cropped_frame, conf=self.opt['conf'], imgsz=self.opt['imgsz'], verbose=False)
                 p1 = (int(box.xyxy[0][0]), int(box.xyxy[0][1]))
                 p2 = (int(box.xyxy[0][2]), int(box.xyxy[0][3]))
                 label = "Violence"
@@ -212,7 +224,7 @@ class ViolencePoseDetectionSystem:
                     self.initialize_video_writer(frame)
                 self.vid_writer.write(frame)
 
-            if self.opt.view:
+            if self.opt['view']:
                 cv2.imshow("Violence Detection", frame)
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
@@ -223,8 +235,8 @@ class ViolencePoseDetectionSystem:
         cv2.destroyAllWindows()
 
     def process_video_stream(self):
-        """Xử lý stream và webcam bằng thread"""
-        if self.opt.view:
+        """Xử lý video stream hoặc webcam trong luồng riêng."""
+        if self.opt['view']:
             cv2.namedWindow("Real-time Violence Detection", cv2.WINDOW_NORMAL)
 
         self.reader_thread = threading.Thread(target=self.frame_reader)
@@ -236,14 +248,14 @@ class ViolencePoseDetectionSystem:
                 if frame is None:
                     break
                 frame_height = frame.shape[0]
-                violence_results = self.violence_model.predict(frame, conf=self.opt.conf, imgsz=self.opt.imgsz, verbose=False)
+                violence_results = self.violence_model.predict(frame, conf=self.opt['conf'], imgsz=self.opt['imgsz'], verbose=False)
                 violence_class_id = next(k for k, v in self.violence_model.names.items() if v == 'Violence')
                 violence_boxes = [box for box in violence_results[0].boxes if box.cls == violence_class_id]
                 violence_detected = len(violence_boxes) > 0
 
                 for box in violence_boxes:
                     cropped_frame, offset = self.crop_image(frame, box)
-                    pose_results = self.pose_model.predict(cropped_frame, conf=self.opt.conf, imgsz=self.opt.imgsz, verbose=False)
+                    pose_results = self.pose_model.predict(cropped_frame, conf=self.opt['conf'], imgsz=self.opt['imgsz'], verbose=False)
                     p1 = (int(box.xyxy[0][0]), int(box.xyxy[0][1]))
                     p2 = (int(box.xyxy[0][2]), int(box.xyxy[0][3]))
                     label = "Violence"
@@ -273,7 +285,7 @@ class ViolencePoseDetectionSystem:
                         self.draw_skeleton(frame, pose_results[0].keypoints, offset)
 
                 if self.save:
-                    if self.source_type == 'stream' and self.opt.source.startswith('rtsp://'):
+                    if self.source_type == 'stream' and self.opt['source'].startswith('rtsp://'):
                         if violence_detected:
                             if not self.recording:
                                 self.start_recording()
@@ -287,7 +299,7 @@ class ViolencePoseDetectionSystem:
                             self.initialize_video_writer(frame)
                         self.vid_writer.write(frame)
 
-                if self.opt.view:
+                if self.opt['view']:
                     cv2.imshow("Real-time Violence Detection", frame)
                     if cv2.waitKey(1) & 0xFF == ord('q'):
                         self.running = False
@@ -304,7 +316,17 @@ class ViolencePoseDetectionSystem:
         self.cap.release()
         cv2.destroyAllWindows()
 
+    def get_frame(self):
+        """Lấy frame từ queue để stream."""
+        if self.frame_queue and not self.frame_queue.empty():
+            frame = self.frame_queue.get()
+            if frame is not None:
+                ret, jpeg = cv2.imencode('.jpg', frame)
+                return jpeg.tobytes()
+        return None
+
     def run(self):
+        """Chạy hệ thống phát hiện bạo lực dựa trên loại nguồn đầu vào."""
         if self.source_type == 'image':
             self.process_image()
         elif self.use_thread:
@@ -312,7 +334,7 @@ class ViolencePoseDetectionSystem:
         else:
             self.process_video_directly()
 
-def parse_args():
+if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description='Violence and Pose Detection System')
     parser.add_argument('--weights', type=str, default='yolo11n-pose.pt', help='Đường dẫn mô hình pose')
@@ -326,9 +348,9 @@ def parse_args():
     parser.add_argument('--save', action='store_true', help='Lưu kết quả đầu ra hoặc ghi hình nếu là RTSP stream')
     parser.add_argument('--tail_length', type=int, default=5,
                         help='Thời gian (giây) tiếp tục ghi hình sau khi không còn phát hiện bạo lực')
-    return parser.parse_args()
+    parser.add_argument('--record_dir', type=str, default='output', help='Thư mục lưu trữ kết quả')
+    args = parser.parse_args()
 
-if __name__ == "__main__":
-    opt = parse_args()
+    opt = vars(args)
     detector = ViolencePoseDetectionSystem(opt)
     detector.run()
