@@ -30,6 +30,8 @@ class ViolencePoseDetectionSystem:
         self.use_thread = self.source_type in ['stream', 'webcam']
         self.frame_queue = queue.Queue(maxsize=10) if self.use_thread else None
         self.output_path = None
+        self.is_recording = False  # Biến theo dõi trạng thái quay màn hình
+        self.ffmpeg_thread = None  # Thread để chạy FFmpeg cho quay màn hình
 
         if self.source_type != 'image':
             self.cap = cv2.VideoCapture(0 if self.source_type == 'webcam' else self.opt['source'])
@@ -144,6 +146,30 @@ class ViolencePoseDetectionSystem:
             self.ffmpeg_process = None
             self.recording = False
             print("Đã dừng ghi hình")
+
+    def start_screen_recording(self):
+        """Bắt đầu quay màn hình bằng FFmpeg."""
+        timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+        filename = self.output_dir / f'screen_recording_{timestamp}.mkv'
+        self.ffmpeg_process = (
+            FFmpeg()
+            .option("y")
+            .input(self.opt['source'], rtsp_transport="tcp" if self.source_type == 'stream' else None)
+            .output(str(filename), vcodec="copy", acodec="copy")
+        )
+        self.ffmpeg_thread = threading.Thread(target=self.ffmpeg_process.execute)
+        self.ffmpeg_thread.start()
+        self.is_recording = True
+        print(f"Bắt đầu quay màn hình: {filename}")
+
+    def stop_screen_recording(self):
+        """Dừng quay màn hình."""
+        if self.ffmpeg_process:
+            self.ffmpeg_process.terminate()
+            self.ffmpeg_thread.join()
+            self.ffmpeg_process = None
+            self.is_recording = False
+            print("Đã dừng quay màn hình")
 
     def process_image(self):
         """Xử lý ảnh đầu vào và lưu kết quả."""
@@ -301,9 +327,16 @@ class ViolencePoseDetectionSystem:
 
                 if self.opt['view']:
                     cv2.imshow("Real-time Violence Detection", frame)
-                    if cv2.waitKey(1) & 0xFF == ord('q'):
+                    key = cv2.waitKey(1) & 0xFF
+                    if key == ord('q'):
                         self.running = False
                         break
+                    elif key == ord('r'):
+                        if not self.is_recording:
+                            self.start_screen_recording()
+                        else:
+                            self.stop_screen_recording()
+
             else:
                 time.sleep(0.01)
 
@@ -311,6 +344,8 @@ class ViolencePoseDetectionSystem:
             self.vid_writer.release()
         if self.recording:
             self.stop_recording()
+        if self.is_recording:
+            self.stop_screen_recording()
         self.running = False
         self.reader_thread.join()
         self.cap.release()
