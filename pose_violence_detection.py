@@ -4,6 +4,7 @@ from pathlib import Path
 from ultralytics import YOLO
 import torch
 import numpy as np
+import math
 from datetime import datetime
 import threading
 import queue
@@ -30,8 +31,8 @@ class ViolencePoseDetectionSystem:
         self.use_thread = self.source_type in ['stream', 'webcam']
         self.frame_queue = queue.Queue(maxsize=10) if self.use_thread else None
         self.output_path = None
-        self.is_recording = False  # Biến theo dõi trạng thái quay màn hình
-        self.ffmpeg_thread = None  # Thread để chạy FFmpeg cho quay màn hình
+        self.is_recording = False
+        self.ffmpeg_thread = None
 
         if self.source_type != 'image':
             self.cap = cv2.VideoCapture(0 if self.source_type == 'webcam' else self.opt['source'])
@@ -82,34 +83,78 @@ class ViolencePoseDetectionSystem:
         xmin, ymin, xmax, ymax = int(xmin), int(ymin), int(xmax), int(ymax)
         return image[ymin:ymax, xmin:xmax], (xmin, ymin)
 
+    def draw_skeleton_lines(self, image, kpts, offset):
+        """Vẽ bộ khung xương từ keypoints lên ảnh."""
+        if kpts is None or len(kpts.data) == 0:
+            return
+        skeleton_pairs = [
+            (0, 1), (0, 2), (1, 3), (2, 4), (5, 6), (5, 7), (7, 9), (6, 8), (8, 10),
+            (11, 12), (5, 11), (6, 12), (11, 13), (13, 15), (12, 14), (14, 16)
+        ]
+        for person_kpts in kpts.data:
+            if person_kpts.shape[0] == 0:
+                continue
+            for pair in skeleton_pairs:
+                if pair[0] < person_kpts.shape[0] and pair[1] < person_kpts.shape[0]:
+                    pt1 = person_kpts[pair[0]]
+                    pt2 = person_kpts[pair[1]]
+                    if pt1[2] > 0.5 and pt2[2] > 0.5:  
+                        x1, y1 = int(pt1[0] + offset[0]), int(pt1[1] + offset[1])
+                        x2, y2 = int(pt2[0] + offset[0]), int(pt2[1] + offset[1])
+                        cv2.line(image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
     def draw_skeleton(self, image, kpts, offset):
         """Vẽ skeleton từ keypoints lên ảnh."""
         if kpts is None or len(kpts.data) == 0:
             return
+        self.draw_skeleton_lines(image, kpts, offset)
         for person_kpts in kpts.data:
+            if person_kpts.shape[0] == 0:
+                continue
             for kpt in person_kpts:
-                if kpt[2] > 0:
-                    x, y = int(kpt[0] + offset[0]), int(kpt[1] + offset[1])
-                    cv2.circle(image, (x, y), 5, (0, 255, 0), -1)
+                if kpt[2] > 0.5:  # Tăng ngưỡng từ 0 lên 0.5
+                    x = int(kpt[0] + offset[0])
+                    y = int(kpt[1] + offset[1])
+                    if 0 <= x < image.shape[1] and 0 <= y < image.shape[0]:
+                        cv2.circle(image, (x, y), 5, (0, 255, 0), -1)
+                    else:
+                        print(f"Keypoint out of bounds: ({x}, {y}), Offset: {offset}, Image size: {image.shape}")
 
     def is_falling(self, person_kpts, person_box, frame_height):
         """Kiểm tra xem người có đang ngã hay không."""
-        left_shoulder_y = person_kpts[5][1] if person_kpts[5][2] > 0 else None
-        right_shoulder_y = person_kpts[6][1] if person_kpts[6][2] > 0 else None
-        shoulder_y = None
-        if left_shoulder_y and right_shoulder_y:
-            shoulder_y = (left_shoulder_y + right_shoulder_y) / 2
-        elif left_shoulder_y:
-            shoulder_y = left_shoulder_y
-        elif right_shoulder_y:
-            shoulder_y = right_shoulder_y
-        if not shoulder_y:
+        left_shoulder = person_kpts[5]
+        right_shoulder = person_kpts[6]
+        left_hip = person_kpts[11]
+        right_hip = person_kpts[12]
+
+        def get_angle(pt1, pt2):
+            if pt1[2] > 0 and pt2[2] > 0:
+                dx = pt2[0] - pt1[0]
+                dy = pt2[1] - pt1[1]
+                angle = math.degrees(math.atan2(dy, dx))
+                return angle
+            return None
+
+        left_angle = get_angle(left_shoulder, left_hip)
+        right_angle = get_angle(right_shoulder, right_hip)
+
+        if left_angle is not None and right_angle is not None:
+            avg_angle = (left_angle + right_angle) / 2
+        elif left_angle is not None:
+            avg_angle = left_angle
+        elif right_angle is not None:
+            avg_angle = right_angle
+        else:
             return False
-        xmin, ymin, xmax, ymax = person_box
-        dx, dy = xmax - xmin, ymax - ymin
-        difference = dy - dx
-        thre = (frame_height // 2) + 100
-        return (difference <= 0 and shoulder_y > thre) or (difference < 0)
+
+        deviation = abs(avg_angle - 90)
+        if deviation > 45:
+            xmin, ymin, xmax, ymax = person_box
+            dx = xmax - xmin
+            dy = ymax - ymin
+            if dy < dx:
+                return True
+        return False
 
     def initialize_video_writer(self, frame):
         """Khởi tạo video writer để ghi video đầu ra."""
@@ -205,6 +250,8 @@ class ViolencePoseDetectionSystem:
         if self.opt['view']:
             cv2.namedWindow("Violence Detection", cv2.WINDOW_NORMAL)
 
+        min_keypoints = 10  # Ngưỡng số lượng keypoint tối thiểu
+
         while self.cap.isOpened():
             success, frame = self.cap.read()
             if not success:
@@ -228,18 +275,20 @@ class ViolencePoseDetectionSystem:
                         for i in range(kpts.shape[0]):
                             if i < boxes.shape[0]:
                                 person_kpts = kpts[i]
-                                person_box = boxes[i].clone()
-                                person_box[0] += offset[0]
-                                person_box[1] += offset[1]
-                                person_box[2] += offset[0]
-                                person_box[3] += offset[1]
-                                if self.is_falling(person_kpts, person_box, frame_height):
-                                    xmin, ymin, xmax, ymax = person_box.int().tolist()
-                                    cv2.putText(frame, "Falling", (xmin, ymin - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9,
-                                                (0, 0, 255), 2)
-                                    cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), (0, 0, 255), 2)
-                                    label = "Serious Violence"
-                                    color = (0, 0, 255)
+                                visible_keypoints = sum(1 for kpt in person_kpts if kpt[2] > 0)
+                                if visible_keypoints >= min_keypoints:
+                                    person_box = boxes[i].clone()
+                                    person_box[0] += offset[0]
+                                    person_box[1] += offset[1]
+                                    person_box[2] += offset[0]
+                                    person_box[3] += offset[1]
+                                    if self.is_falling(person_kpts, person_box, frame_height):
+                                        xmin, ymin, xmax, ymax = person_box.int().tolist()
+                                        cv2.putText(frame, "Falling", (xmin, ymin - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9,
+                                                    (0, 0, 255), 2)
+                                        cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), (0, 0, 255), 2)
+                                        label = "Serious Violence"
+                                        color = (0, 0, 255)
                 cv2.rectangle(frame, p1, p2, color, 2)
                 cv2.putText(frame, label, (p1[0], p1[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
                 if pose_results and pose_results[0].keypoints is not None:
@@ -268,6 +317,8 @@ class ViolencePoseDetectionSystem:
         self.reader_thread = threading.Thread(target=self.frame_reader)
         self.reader_thread.start()
 
+        min_keypoints = 10  # Ngưỡng số lượng keypoint tối thiểu
+
         while self.running:
             if not self.frame_queue.empty():
                 frame = self.frame_queue.get()
@@ -293,18 +344,20 @@ class ViolencePoseDetectionSystem:
                             for i in range(kpts.shape[0]):
                                 if i < boxes.shape[0]:
                                     person_kpts = kpts[i]
-                                    person_box = boxes[i].clone()
-                                    person_box[0] += offset[0]
-                                    person_box[1] += offset[1]
-                                    person_box[2] += offset[0]
-                                    person_box[3] += offset[1]
-                                    if self.is_falling(person_kpts, person_box, frame_height):
-                                        xmin, ymin, xmax, ymax = person_box.int().tolist()
-                                        cv2.putText(frame, "Falling", (xmin, ymin - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9,
-                                                    (0, 0, 255), 2)
-                                        cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), (0, 0, 255), 2)
-                                        label = "Serious Violence"
-                                        color = (0, 0, 255)
+                                    visible_keypoints = sum(1 for kpt in person_kpts if kpt[2] > 0)
+                                    if visible_keypoints >= min_keypoints:
+                                        person_box = boxes[i].clone()
+                                        person_box[0] += offset[0]
+                                        person_box[1] += offset[1]
+                                        person_box[2] += offset[0]
+                                        person_box[3] += offset[1]
+                                        if self.is_falling(person_kpts, person_box, frame_height):
+                                            xmin, ymin, xmax, ymax = person_box.int().tolist()
+                                            cv2.putText(frame, "Falling", (xmin, ymin - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9,
+                                                        (0, 0, 255), 2)
+                                            cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), (0, 0, 255), 2)
+                                            label = "Serious Violence"
+                                            color = (0, 0, 255)
                     cv2.rectangle(frame, p1, p2, color, 2)
                     cv2.putText(frame, label, (p1[0], p1[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
                     if pose_results and pose_results[0].keypoints is not None:
@@ -374,7 +427,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Violence and Pose Detection System')
     parser.add_argument('--weights', type=str, default='yolo11n-pose.pt', help='Đường dẫn mô hình pose')
     parser.add_argument('--violence-weights', type=str,
-                        default=r'C:\BaiTap\Python\Violence_Detection\Yolo11_Violence_Detection\runs\detect\train\weights\best.onnx',
+                        default=r'C:\BaiTap\Python\Violence_Detection\Yolo11_Violence_Detection\runs\detect\train\weights\best.pt',
                         help='Đường dẫn mô hình Violence')
     parser.add_argument('--source', type=str, default='0', help='Ảnh/Video/Webcam/Stream URL')
     parser.add_argument('--imgsz', type=int, default=640, help='Kích thước inference')
@@ -383,7 +436,7 @@ if __name__ == "__main__":
     parser.add_argument('--save', action='store_true', help='Lưu kết quả đầu ra hoặc ghi hình nếu là RTSP stream')
     parser.add_argument('--tail_length', type=int, default=5,
                         help='Thời gian (giây) tiếp tục ghi hình sau khi không còn phát hiện bạo lực')
-    parser.add_argument('--record_dir', type=str, default='output', help='Thư mục lưu trữ kết quả')
+    parser.add_argument('--record_dir', type=str, default='recordings', help='Thư mục lưu trữ kết quả')
     args = parser.parse_args()
 
     opt = vars(args)

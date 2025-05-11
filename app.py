@@ -12,8 +12,6 @@ detection_thread = None
 # Tạo thư mục uploads và output nếu chưa tồn tại
 if not os.path.exists('uploads'):
     os.makedirs('uploads')
-if not os.path.exists('output'):
-    os.makedirs('output')
 
 @app.route('/', methods=['GET'])
 def index():
@@ -38,13 +36,12 @@ def start_detection():
     # Xây dựng URL RTSP đúng cú pháp
     rtsp_url = f"rtsp://{admin}:{password}@{ip}:{port}/{path}?rtsp_transport={protocol}"
 
-    enable_recording = 'enable_recording' in request.form
     record_dir = request.form['record_dir']
 
     # Tạo dictionary cho options thay vì dùng type()
     opt = {
         'source': rtsp_url,
-        'save': enable_recording,
+        'save': False,  # Ghi hình sẽ được điều khiển thủ công
         'record_dir': record_dir,
         'weights': 'yolo11n-pose.pt',
         'violence_weights': r'C:\BaiTap\Python\Violence_Detection\Yolo11_Violence_Detection\runs\detect\train\weights\best.onnx',
@@ -66,11 +63,35 @@ def stop_detection():
     if current_detector is None:
         return Response('No detection running', status=400)
 
+    if current_detector.recording:
+        current_detector.stop_recording()
     current_detector.running = False
     detection_thread.join()
     current_detector = None
     detection_thread = None
     return 'Detection stopped'
+
+@app.route('/start_recording', methods=['POST'])
+def start_recording():
+    """Bắt đầu ghi hình."""
+    global current_detector
+    if current_detector is None or not current_detector.running:
+        return Response('Detection not running', status=400)
+    if current_detector.recording:
+        return Response('Already recording', status=400)
+    current_detector.start_recording()
+    return 'Recording started'
+
+@app.route('/stop_recording', methods=['POST'])
+def stop_recording():
+    """Dừng ghi hình."""
+    global current_detector
+    if current_detector is None or not current_detector.running:
+        return Response('Detection not running', status=400)
+    if not current_detector.recording:
+        return Response('Not recording', status=400)
+    current_detector.stop_recording()
+    return 'Recording stopped'
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
@@ -87,11 +108,11 @@ def upload_file():
             'save': True,
             'record_dir': request.form['record_dir'],
             'weights': 'yolo11n-pose.pt',
-            'violence_weights': r'C:\BaiTap\Python\Violence_Detection\Yolo11_Violence_Detection\runs\detect\train\weights\best.onnx',
+            'violence_weights': r'C:\BaiTap\Python\Violence_Detection\Yolo11_Violence_Detection\runs\detect\train\weights\best.pt',
             'imgsz': int(request.form['imgsz']),
             'conf': float(request.form['conf']),
             'view': False,
-            'tail_length': 3 # just for fun
+            'tail_length': 3  # just for fun
         }
 
         detector = ViolencePoseDetectionSystem(opt)
