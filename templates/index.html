@@ -39,6 +39,19 @@
             text-align: center;
             margin: 20px 0;
         }
+        #stream-container-hik, #stream-container-other {
+            max-height: 500px; /* Giới hạn chiều cao container, bạn có thể điều chỉnh giá trị này */
+            overflow: auto; /* Thêm thanh cuộn nếu nội dung vượt quá */
+            text-align: center; /* Căn giữa hình ảnh nếu cần */
+            margin-top: 20px; /* Giữ khoảng cách như thiết kế ban đầu */
+        }
+
+        #stream_hik, #stream_other {
+            max-width: 100%; /* Đảm bảo hình ảnh không vượt quá chiều rộng container */
+            height: auto; /* Giữ tỷ lệ hình ảnh */
+            display: block; /* Đảm bảo hình ảnh là khối độc lập */
+            margin: 0 auto; /* Căn giữa hình ảnh trong container */
+        }
     </style>
 </head>
 <body>
@@ -73,7 +86,7 @@
                     </div>
                     <div class="form-group">
                         <label for="port_hik">Port:</label>
-                        <input type="number" class="form-control" id="port_hik" name="port" placeholder="e.g., 554" required>
+                        <input type="number" class="form-control" id="port_hik" name="port" placeholder="e.g., 554" value="554" required>
                     </div>
                     <input type="hidden" id="path_hik" name="path" value="Streaming/Channels/101">
                     <div class="form-group">

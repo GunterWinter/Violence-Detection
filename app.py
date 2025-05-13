@@ -44,7 +44,7 @@ def start_detection():
         'save': False,  # Ghi hình sẽ được điều khiển thủ công
         'record_dir': record_dir,
         'weights': 'yolo11n-pose.pt',
-        'violence_weights': r'C:\BaiTap\Python\Violence_Detection\Yolo11_Violence_Detection\runs\detect\train\weights\best.onnx',
+        'violence_weights': r'C:\BaiTap\Python\Violence_Detection\Yolo11_Violence_Detection\runs\detect\train\weights\best.pt',
         'imgsz': int(request.form['imgsz']),
         'conf': float(request.form['conf']),
         'view': False,  # Không hiển thị trên server
