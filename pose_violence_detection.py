@@ -98,46 +98,30 @@ class ViolencePoseDetectionSystem:
         xmin, ymin, xmax, ymax = map(int, box.xyxy[0].tolist())
         return image[ymin:ymax, xmin:xmax], (xmin, ymin)
 
-    def draw_skeleton_lines(self, image, kpts, offset):
-        """Vẽ các đường nối của bộ khung xương.
+    def draw_skeleton(self, image, person_kpts, offset):
+        """Vẽ bộ khung xương cho một người.
 
         Args:
             image (np.ndarray): Ảnh để vẽ lên.
-            kpts: Keypoints từ mô hình pose.
+            person_kpts: Keypoints của một người.
             offset (tuple): Offset (x, y) để điều chỉnh tọa độ.
         """
-        if kpts is None or len(kpts.data) == 0:
-            return
         skeleton_pairs = [
             (0, 1), (0, 2), (1, 3), (2, 4), (5, 6), (5, 7), (7, 9), (6, 8), (8, 10),
             (11, 12), (5, 11), (6, 12), (11, 13), (13, 15), (12, 14), (14, 16)
         ]
-        for person_kpts in kpts.data:
-            for pair in skeleton_pairs:
-                if pair[0] < person_kpts.shape[0] and pair[1] < person_kpts.shape[0]:
-                    pt1, pt2 = person_kpts[pair[0]], person_kpts[pair[1]]
-                    if pt1[2] > 0.5 and pt2[2] > 0.5:
-                        x1, y1 = int(pt1[0] + offset[0]), int(pt1[1] + offset[1])
-                        x2, y2 = int(pt2[0] + offset[0]), int(pt2[1] + offset[1])
-                        cv2.line(image, (x1, y1), (x2, y2), (0, 255, 0), 2)
-
-    def draw_skeleton(self, image, kpts, offset):
-        """Vẽ bộ khung xương bao gồm đường nối và điểm.
-
-        Args:
-            image (np.ndarray): Ảnh để vẽ lên.
-            kpts: Keypoints từ mô hình pose.
-            offset (tuple): Offset (x, y) để điều chỉnh tọa độ.
-        """
-        if kpts is None or len(kpts.data) == 0:
-            return
-        self.draw_skeleton_lines(image, kpts, offset)
-        for person_kpts in kpts.data:
-            for kpt in person_kpts:
-                if kpt[2] > 0.5:
-                    x, y = int(kpt[0] + offset[0]), int(kpt[1] + offset[1])
-                    if 0 <= x < image.shape[1] and 0 <= y < image.shape[0]:
-                        cv2.circle(image, (x, y), 5, (0, 255, 0), -1)
+        for pair in skeleton_pairs:
+            if pair[0] < person_kpts.shape[0] and pair[1] < person_kpts.shape[0]:
+                pt1, pt2 = person_kpts[pair[0]], person_kpts[pair[1]]
+                if pt1[2] > 0.5 and pt2[2] > 0.5:
+                    x1, y1 = int(pt1[0] + offset[0]), int(pt1[1] + offset[1])
+                    x2, y2 = int(pt2[0] + offset[0]), int(pt2[1] + offset[1])
+                    cv2.line(image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        for kpt in person_kpts:
+            if kpt[2] > 0.5:
+                x, y = int(kpt[0] + offset[0]), int(kpt[1] + offset[1])
+                if 0 <= x < image.shape[1] and 0 <= y < image.shape[0]:
+                    cv2.circle(image, (x, y), 5, (0, 255, 0), -1)
 
     def is_falling(self, person_kpts, person_box, frame_height):
         """Kiểm tra xem người có đang ngã hay không dựa trên góc nghiêng.
@@ -150,27 +134,39 @@ class ViolencePoseDetectionSystem:
         Returns:
             bool: True nếu người đang ngã.
         """
-        # left shoulder (5), right shoulder (6), left hip (11), right hip (12)
+        # Các điểm mấu cần thiết: left shoulder (5), right shoulder (6), left hip (11), right hip (12)
         required_keypoints = [5, 6, 11, 12]
-
         for idx in required_keypoints:
-            if person_kpts[idx][2] <= 0.5:
+            if person_kpts[idx][2] <= 0.5:  # Nếu điểm mấu không đủ độ tin cậy
                 return False
+
         # Lấy tọa độ các điểm chính
         left_shoulder, right_shoulder = person_kpts[5], person_kpts[6]
         left_hip, right_hip = person_kpts[11], person_kpts[12]
 
-        def get_angle(pt1, pt2):
-            if pt1[2] > 0 and pt2[2] > 0:
-                dx, dy = pt2[0] - pt1[0], pt2[1] - pt1[1]
-                return math.degrees(math.atan2(dy, dx))
+        # Tính vector từ vai đến hông
+        def get_vector(pt1, pt2):
+            if pt1[2] > 0.5 and pt2[2] > 0.5:
+                return pt2[0] - pt1[0], pt2[1] - pt1[1]
             return None
 
-        # Tính góc nghiêng từ vai đến hông
-        left_angle = get_angle(left_shoulder, left_hip)
-        right_angle = get_angle(right_shoulder, right_hip)
+        left_vector = get_vector(left_shoulder, left_hip)
+        right_vector = get_vector(right_shoulder, right_hip)
 
-        # Xác định góc trung bình
+        if left_vector is None and right_vector is None:
+            return False
+
+        # Tính góc nghiêng so với phương thẳng đứng
+        def get_angle(vector):
+            if vector:
+                dx, dy = vector
+                angle = math.degrees(math.atan2(dy, dx))
+                return angle
+            return None
+
+        left_angle = get_angle(left_vector)
+        right_angle = get_angle(right_vector)
+
         if left_angle is not None and right_angle is not None:
             avg_angle = (left_angle + right_angle) / 2
         elif left_angle is not None:
@@ -180,14 +176,9 @@ class ViolencePoseDetectionSystem:
         else:
             return False
 
-        # Kiểm tra độ lệch so với phương thẳng đứng
+        # Tính độ lệch so với phương thẳng đứng (90 độ)
         deviation = abs(avg_angle - 90)
-        if deviation > 45:
-            xmin, ymin, xmax, ymax = person_box
-            dx, dy = xmax - xmin, ymax - ymin
-            if dy < dx:  # Nếu hộp rộng hơn cao, có khả năng ngã
-                return True
-        return False
+        return deviation > 45  # Nếu độ lệch lớn hơn 45 độ thì coi là ngã
 
     def initialize_video_writer(self, frame):
         """Khởi tạo video writer để ghi video đầu ra.
@@ -261,43 +252,54 @@ class ViolencePoseDetectionSystem:
             tuple: Frame đã xử lý và boolean chỉ ra có phát hiện bạo lực hay không.
         """
         frame_height = frame.shape[0]
-        violence_results = self.violence_model.predict(frame, conf=self.opt['conf'], imgsz=self.opt['imgsz'], verbose=False)
+        violence_results = self.violence_model.predict(frame, conf=self.opt['conf'], imgsz=self.opt['imgsz'],
+                                                       verbose=False)
         violence_class_id = next(k for k, v in self.violence_model.names.items() if v == 'Violence')
-        violence_boxes = [box for box in violence_results[0].boxes if box.cls == violence_class_id]
+        violence_boxes = [box.xyxy[0].tolist() for box in violence_results[0].boxes if box.cls == violence_class_id]
         violence_detected = len(violence_boxes) > 0
 
+        # Phát hiện người và pose trong toàn bộ khung hình
+        pose_results = self.pose_model.predict(frame, conf=self.opt['conf'], imgsz=self.opt['imgsz'], verbose=False)
+        if pose_results and pose_results[0].keypoints is not None and pose_results[0].boxes is not None:
+            kpts = pose_results[0].keypoints.data
+            boxes = pose_results[0].boxes.xyxy
+            for i in range(boxes.shape[0]):
+                person_box = boxes[i].tolist()
+                for violence_box in violence_boxes:
+                    if self.is_box_intersecting(person_box, violence_box):
+                        person_kpts = kpts[i]
+                        if self.is_falling(person_kpts, person_box, frame_height):
+                            xmin, ymin, xmax, ymax = map(int, person_box)
+                            cv2.putText(frame, "Falling", (xmin, ymin - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255),
+                                        2)
+                            cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), (0, 0, 255), 2)
+                        # Vẽ bộ khung xương
+                        self.draw_skeleton(frame, person_kpts, (0, 0))
+                        break
+
+        # Vẽ bounding box cho violence
         for box in violence_boxes:
-            cropped_frame, offset = self.crop_image(frame, box)
-            pose_results = self.pose_model.predict(cropped_frame, conf=self.opt['conf'], imgsz=self.opt['imgsz'], verbose=False)
-            p1 = (int(box.xyxy[0][0]), int(box.xyxy[0][1]))
-            p2 = (int(box.xyxy[0][2]), int(box.xyxy[0][3]))
+            p1 = (int(box[0]), int(box[1]))
+            p2 = (int(box[2]), int(box[3]))
             label, color = "Violence", (0, 255, 0)
-            if pose_results and pose_results[0].keypoints is not None and pose_results[0].boxes is not None:
-                kpts = pose_results[0].keypoints.data
-                boxes = pose_results[0].boxes.xyxy
-                if boxes.shape[0] > 0:
-                    for i in range(kpts.shape[0]):
-                        if i < boxes.shape[0]:
-                            person_kpts = kpts[i]
-                            visible_keypoints = sum(1 for kpt in person_kpts if kpt[2] > 0)
-                            if visible_keypoints >= 10:
-                                person_box = boxes[i].clone()
-                                person_box[0] += offset[0]
-                                person_box[1] += offset[1]
-                                person_box[2] += offset[0]
-                                person_box[3] += offset[1]
-                                if self.is_falling(person_kpts, person_box, frame_height):
-                                    xmin, ymin, xmax, ymax = person_box.int().tolist()
-                                    cv2.putText(frame, "Falling", (xmin, ymin - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9,
-                                                (0, 0, 255), 2)
-                                    cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), (0, 0, 255), 2)
-                                    label, color = "Serious Violence", (0, 0, 255)
             cv2.rectangle(frame, p1, p2, color, 2)
             cv2.putText(frame, label, (p1[0], p1[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
-            if pose_results and pose_results[0].keypoints is not None:
-                self.draw_skeleton(frame, pose_results[0].keypoints, offset)
 
         return frame, violence_detected
+
+    def is_box_intersecting(self, box1, box2):
+        """Kiểm tra xem hai bounding box có giao nhau hay không.
+
+        Args:
+            box1 (list): [xmin, ymin, xmax, ymax] của box thứ nhất.
+            box2 (list): [xmin, ymin, xmax, ymax] của box thứ hai.
+
+        Returns:
+            bool: True nếu hai box giao nhau.
+        """
+        x1_min, y1_min, x1_max, y1_max = box1
+        x2_min, y2_min, x2_max, y2_max = box2
+        return not (x1_max < x2_min or x1_min > x2_max or y1_max < y2_min or y1_min > y2_max)
 
     def process_image(self):
         """Xử lý ảnh đầu vào và lưu kết quả nếu cần."""
