@@ -150,6 +150,12 @@ class ViolencePoseDetectionSystem:
         Returns:
             bool: True nếu người đang ngã.
         """
+        # left shoulder (5), right shoulder (6), left hip (11), right hip (12)
+        required_keypoints = [5, 6, 11, 12]
+
+        for idx in required_keypoints:
+            if person_kpts[idx][2] <= 0.5:
+                return False
         # Lấy tọa độ các điểm chính
         left_shoulder, right_shoulder = person_kpts[5], person_kpts[6]
         left_hip, right_hip = person_kpts[11], person_kpts[12]
