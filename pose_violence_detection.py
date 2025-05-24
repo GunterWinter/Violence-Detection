@@ -6,6 +6,8 @@ import threading
 import queue
 from pathlib import Path
 from datetime import datetime
+
+from sympy import false
 from ultralytics import YOLO
 from ffmpeg import FFmpeg
 
@@ -134,17 +136,14 @@ class ViolencePoseDetectionSystem:
         Returns:
             bool: True nếu người đang ngã.
         """
-        # Các điểm mấu cần thiết: left shoulder (5), right shoulder (6), left hip (11), right hip (12)
         required_keypoints = [5, 6, 11, 12]
         for idx in required_keypoints:
-            if person_kpts[idx][2] <= 0.5:  # Nếu điểm mấu không đủ độ tin cậy
+            if person_kpts[idx][2] <= 0.5:
                 return False
 
-        # Lấy tọa độ các điểm chính
         left_shoulder, right_shoulder = person_kpts[5], person_kpts[6]
         left_hip, right_hip = person_kpts[11], person_kpts[12]
 
-        # Tính vector từ vai đến hông
         def get_vector(pt1, pt2):
             if pt1[2] > 0.5 and pt2[2] > 0.5:
                 return pt2[0] - pt1[0], pt2[1] - pt1[1]
@@ -156,7 +155,6 @@ class ViolencePoseDetectionSystem:
         if left_vector is None and right_vector is None:
             return False
 
-        # Tính góc nghiêng so với phương thẳng đứng
         def get_angle(vector):
             if vector:
                 dx, dy = vector
@@ -176,9 +174,8 @@ class ViolencePoseDetectionSystem:
         else:
             return False
 
-        # Tính độ lệch so với phương thẳng đứng (90 độ)
         deviation = abs(avg_angle - 90)
-        return deviation > 45  # Nếu độ lệch lớn hơn 45 độ thì coi là ngã
+        return deviation > 45
 
     def initialize_video_writer(self, frame):
         """Khởi tạo video writer để ghi video đầu ra.
@@ -187,12 +184,15 @@ class ViolencePoseDetectionSystem:
             frame (np.ndarray): Frame đầu tiên để lấy kích thước.
         """
         if self.vid_writer is None:
-            fps = 30 if self.source_type == 'webcam' else self.cap.get(cv2.CAP_PROP_FPS) or 30
+            if self.source_type == 'video':
+                fps = self.cap.get(cv2.CAP_PROP_FPS)
+            else:
+                fps = 30  # Mặc định cho webcam
             w, h = frame.shape[1], frame.shape[0]
             output_path = str(self.output_dir / f'output_{int(time.time())}.mp4')
             self.vid_writer = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
             self.output_path = output_path
-            print(f"Đã khởi tạo video writer tại: {output_path}")
+            print(f"Đã khởi tạo video writer tại: {output_path} với FPS: {fps}")
 
     def start_recording(self):
         """Bắt đầu ghi hình từ RTSP stream bằng FFmpeg."""
@@ -257,8 +257,7 @@ class ViolencePoseDetectionSystem:
         violence_class_id = next(k for k, v in self.violence_model.names.items() if v == 'Violence')
         violence_boxes = [box.xyxy[0].tolist() for box in violence_results[0].boxes if box.cls == violence_class_id]
         violence_detected = len(violence_boxes) > 0
-
-        # Phát hiện người và pose trong toàn bộ khung hình
+        falling = False
         pose_results = self.pose_model.predict(frame, conf=self.opt['conf'], imgsz=self.opt['imgsz'], verbose=False)
         if pose_results and pose_results[0].keypoints is not None and pose_results[0].boxes is not None:
             kpts = pose_results[0].keypoints.data
@@ -269,19 +268,21 @@ class ViolencePoseDetectionSystem:
                     if self.is_box_intersecting(person_box, violence_box):
                         person_kpts = kpts[i]
                         if self.is_falling(person_kpts, person_box, frame_height):
+                            falling = True
                             xmin, ymin, xmax, ymax = map(int, person_box)
                             cv2.putText(frame, "Falling", (xmin, ymin - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255),
                                         2)
                             cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), (0, 0, 255), 2)
-                        # Vẽ bộ khung xương
                         self.draw_skeleton(frame, person_kpts, (0, 0))
                         break
 
-        # Vẽ bounding box cho violence
         for box in violence_boxes:
             p1 = (int(box[0]), int(box[1]))
             p2 = (int(box[2]), int(box[3]))
-            label, color = "Violence", (0, 255, 0)
+            if(falling):
+                label, color = "Serious Violence", (0, 0, 255)
+            else:
+                label, color = "Violence", (0, 255, 0)
             cv2.rectangle(frame, p1, p2, color, 2)
             cv2.putText(frame, label, (p1[0], p1[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
 
@@ -315,27 +316,48 @@ class ViolencePoseDetectionSystem:
             print(f"Ảnh đã lưu tại: {output_path}")
 
     def process_video_directly(self):
-        """Xử lý video trực tiếp từ file video."""
+        """Xử lý video trực tiếp từ file video với multi-threading."""
         self.cap = cv2.VideoCapture(self.opt['source'])
         if not self.cap.isOpened():
             raise ValueError("Không thể mở video")
-        if self.opt['view']:
+        if self.opt.get('view', False):
             cv2.namedWindow("Violence Detection", cv2.WINDOW_NORMAL)
 
-        while self.cap.isOpened():
-            success, frame = self.cap.read()
-            if not success:
+        frame_queue = queue.Queue(maxsize=100)
+
+        # Hàm đọc frame chạy trong thread riêng
+        def frame_reader():
+            while self.cap.isOpened():
+                success, frame = self.cap.read()
+                if not success:
+                    break
+                # Đợi đến khi queue có chỗ trống
+                while frame_queue.full():
+                    time.sleep(0.01)
+                frame_queue.put(frame)
+            frame_queue.put(None)  # Đánh dấu kết thúc
+
+        # Khởi động thread đọc frame
+        reader_thread = threading.Thread(target=frame_reader)
+        reader_thread.start()
+
+        # Xử lý và ghi frame
+        while True:
+            frame = frame_queue.get()
+            if frame is None:
                 break
             processed_frame, _ = self._process_frame(frame)
             if self.save:
                 if self.vid_writer is None:
                     self.initialize_video_writer(processed_frame)
                 self.vid_writer.write(processed_frame)
-            if self.opt['view']:
+            if self.opt.get('view', False):
                 cv2.imshow("Violence Detection", processed_frame)
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
 
+        # Dọn dẹp
+        reader_thread.join()
         if self.vid_writer:
             self.vid_writer.release()
         self.cap.release()
