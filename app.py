@@ -120,13 +120,10 @@ def upload_file():
         return {'type': 'image' if filename.endswith(('.jpg', '.png', '.jpeg')) else 'video', 'filename': detector.output_path}
     return {'error': 'No file uploaded'}, 400
 
-@app.route('/output/<path:filename>')
-def serve_output(filename):
+@app.route('/<path:dir_name>/<path:filename>')
+def serve_output(dir_name, filename):
     """Phục vụ file đầu ra từ thư mục output."""
-    if current_detector and current_detector.output_dir:
-        return send_from_directory(current_detector.output_dir, filename)
-    else:
-        return send_from_directory('output', filename)
+    return send_from_directory(dir_name, filename)
 
 def gen_frames():
     """Tạo frame cho video stream từ detector."""

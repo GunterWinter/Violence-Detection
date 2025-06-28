@@ -269,10 +269,10 @@ class ViolencePoseDetectionSystem:
                         person_kpts = kpts[i]
                         if self.is_falling(person_kpts, person_box, frame_height):
                             falling = True
-                            # xmin, ymin, xmax, ymax = map(int, person_box)
-                            # cv2.putText(frame, "Falling", (xmin, ymin - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255),
-                            #             2)
-                            # cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), (0, 0, 255), 2)
+                            xmin, ymin, xmax, ymax = map(int, person_box)
+                            cv2.putText(frame, "Falling", (xmin, ymin - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255),
+                                        2)
+                            cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), (0, 0, 255), 2)
                         self.draw_skeleton(frame, person_kpts, (0, 0))
                         break
 
